@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Synth - SINCRONIZACIÓN PERFECTA</title>
+    <style>
+        :root {
+            --bg: #121212;
+            --panel: #1e1e1e;
+            --text: #eee;
+            --border: #444;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'Fira Code', monospace; padding-top: 80px; }
+        .top-bar {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+            background: var(--panel); border-bottom: 1px solid var(--border);
+            padding: 12px 20px; display: flex; gap: 12px; flex-wrap: wrap;
+            align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        .top-bar label { font-size: 0.85em; color: #aaa; margin-right: 6px; }
+        .top-bar input, .top-bar button { font-family: inherit; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); }
+        .top-bar input[type="text"] { width: 120px; background: #333; color: white; }
+        .top-bar input[type="color"] { width: 40px; height: 40px; padding: 0; cursor: pointer; }
+        .top-bar input[type="range"] { width: 80px; }
+        .top-bar button { background: #555; color: white; cursor: pointer; }
+        .top-bar button:hover { background: #666; }
+
+        #tracks-container { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+        .track { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 15px; }
+        .canvas-container { position: relative; display: inline-block; }
+        .main-canvas { background: #000; display: block; cursor: crosshair; }
+        .playhead-line {
+            position: absolute; top: 0; width: 3px; height: 100%; background: #0f0;
+            pointer-events: none; box-shadow: 0 0 8px #0f0;
+        }
+        .track-controls {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 10px; align-items: center;
+        }
+        .track-controls label { font-size: 0.8em; color: #aaa; }
+        .track-controls input { width: 100%; }
+        .track-controls button { font-size: 0.8em; padding: 4px 8px; }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <input type="text" id="size-input" placeholder="800x120" value="800x120">
+        <button id="create-track">Crear Track</button>
+
+        <label>Pincel:</label>
+        <input type="color" id="brush-color" value="#ff3333">
+        <input type="range" id="brush-size" min="1" max="30" value="6">
+        <span id="brush-size-value">6</span>
+
+        <button id="clear-all">Borrar Todo</button>
+    </div>
+
+    <div id="tracks-container"></div>
+
+    <script type="module">
+     const WORKLET_CODE = `
+            class VisualSynthProcessor extends AudioWorkletProcessor {
+                constructor() {
+                    super();
+                    this.playhead = 0;
+                    this.time = 0;
+                    this.pixelData = null;
+                    this.params = { speed: 0.3, volume: 0.7, pan: 0, fmin: 50, fmax: 14000, density: 4, reverse: false };
+                    this.width = 1;
+                    this.height = 1;
+
+                    this.port.onmessage = (e) => {
+                        if (e.data.type === 'pixels') {
+                            this.pixelData = new Float32Array(e.data.data.pixels);
+                            this.width = e.data.data.width;
+                            this.height = e.data.data.height;
+                        } else if (e.data.type === 'params') {
+                            Object.assign(this.params, e.data.data);
+                        }
+                    };
+                }
+
+                getPixel(x, y) {
+                    if (!this.pixelData) return [0,0,0];
+                    const xi = Math.floor(x) % this.width;
+                    const frac = x - xi;
+                    const x1 = (xi + 1) % this.width;
+                    const idx0 = (y * this.width + xi) * 3;
+                    const idx1 = (y * this.width + x1) * 3;
+                    const r = (1 - frac) * this.pixelData[idx0]     + frac * this.pixelData[idx1];
+                    const g = (1 - frac) * this.pixelData[idx0 + 1] + frac * this.pixelData[idx1 + 1];
+                    const b = (1 - frac) * this.pixelData[idx0 + 2] + frac * this.pixelData[idx1 + 2];
+                    return [r, g, b];
+                }
+
+                saw(phase)  { const t = (phase / (2 * Math.PI)) % 1; return 2 * t - 1; }
+                pulse(phase){ return ((phase / (2 * Math.PI)) % 1 < 0.5) ? 1 : -1; }
+                noiseSin(phase) { return Math.sin(phase) * (Math.random() * 0.4 + 0.6); }
+
+                process(inputs, outputs, parameters) {
+                    const outL = outputs[0][0];
+                    const outR = outputs[0][1];
+                    if (!outL || !outR || !this.pixelData) return true;
+
+                    const { speed, volume, pan, fmin, fmax, density, reverse } = this.params;
+                    const actualSpeed = speed * (reverse ? -1 : 1);
+                    const sr = sampleRate;
+                    const bufferSize = outL.length;
+                    const dt = bufferSize / sr;
+
+                    // ENVÍO DE POSICIÓN REAL (sin compensar)
+                    this.port.postMessage({ type: 'playhead', value: this.playhead });
+
+                    for (let i = 0; i < bufferSize; i++) {
+                        let sample = 0;
+                        const t = this.time + i / sr;
+                        const ph = this.playhead + i * actualSpeed / sr;
+
+                        for (let y = 0; y < this.height; y += density) {
+                            const [r, g, b] = this.getPixel(ph, y);
+                            const normY = y / (this.height - 1);
+                            const freq = fmax * Math.pow(fmin / fmax, normY);
+                            const phase = 2 * Math.PI * freq * t;
+
+                            if (r > 0.01) sample += r * this.saw(phase);
+                            if (g > 0.01) sample += g * this.pulse(phase);
+                            if (b > 0.01) sample += b * this.noiseSin(phase);
+                        }
+
+                        const clipped = Math.tanh(sample * 1.5) * volume * 0.25;
+                        const panL = Math.cos((pan + 1) * Math.PI / 4);
+                        const panR = Math.sin((pan + 1) * Math.PI / 4);
+                        outL[i] = clipped * panL;
+                        outR[i] = clipped * panR;
+                    }
+
+                    this.time += dt;
+                    this.playhead = (this.playhead + actualSpeed * dt + this.width * 1000) % this.width;
+                    return true;
+                }
+            }
+            registerProcessor('visual-synth', VisualSynthProcessor);
+     `;
+
+     // === MAIN ===
+     const audioCtx = new AudioContext();
+     const tracks = [];
+     let brushColor = '#ff3333', brushSize = 6;
+
+     // LATENCIA FIJA (óptima en 2025)
+     const LATENCY_MS = 65;
+
+     const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+     const url = URL.createObjectURL(blob);
+     await audioCtx.audioWorklet.addModule(url);
+
+     // BARRA
+     document.getElementById('brush-color').addEventListener('input', e => brushColor = e.target.value);
+     document.getElementById('brush-size').addEventListener('input', e => {
+         brushSize = +e.target.value;
+         document.getElementById('brush-size-value').textContent = brushSize;
+     });
+     document.getElementById('clear-all').addEventListener('click', () => tracks.forEach(t => t.clearTrack()));
+     document.getElementById('create-track').addEventListener('click', async () => {
+         await audioCtx.resume();
+         const [w, h] = document.getElementById('size-input').value.split('x').map(Number);
+         if (!w || !h || w < 50 || h < 20) return alert('Tamaño inválido');
+         createTrack(w, h);
+     });
+
+     function createTrack(width, height) {
+         const track = { width, height, lastSpeed: 0.3 };
+         const div = document.createElement('div');
+         div.className = 'track';
+         track.div = div;
+
+         const container = document.createElement('div');
+         container.className = 'canvas-container';
+         const canvas = document.createElement('canvas');
+         canvas.width = width; canvas.height = height;
+         canvas.className = 'main-canvas';
+         const playhead = document.createElement('div');
+         playhead.className = 'playhead-line';
+         container.append(canvas, playhead);
+         track.playhead = playhead;
+
+         const controls = document.createElement('div');
+         controls.className = 'track-controls';
+         controls.innerHTML = `
+             <label>Vel: <input type="range" class="speed" min="0.01" max="3" step="0.01" value="0.3"></label>
+             <label><input type="checkbox" class="reverse"> Rev</label>
+             <label>Vol: <input type="range" class="vol" min="0" max="1" step="0.01" value="0.7"></label>
+             <label>Pan: <input type="range" class="pan" min="-1" max="1" step="0.1" value="0"></label>
+             <label>Min: <input type="number" class="fmin" value="50"></label>
+             <label>Max: <input type="number" class="fmax" value="14000"></label>
+             <label>Dens: <input type="range" class="density" min="1" max="10" value="4"></label>
+             <button class="play-pause">Pause</button>
+             <button class="rand">Random</button>
+             <button class="clear">Clear</button>
+             <button class="delete">Delete</button>
+         `;
+
+         div.append(container, controls);
+         document.getElementById('tracks-container').appendChild(div);
+
+         const node = new AudioWorkletNode(audioCtx, 'visual-synth', { outputChannelCount: [2] });
+         node.connect(audioCtx.destination);
+         track.node = node;
+
+         const ctx = canvas.getContext('2d', { willReadFrequently: true });
+         track.ctx = ctx;
+         ctx.fillStyle = '#000';
+         ctx.fillRect(0, 0, width, height);
+
+         const pixelArray = new Float32Array(width * height * 3);
+         track.pixelArray = pixelArray;
+
+         const updatePixels = () => {
+             const data = ctx.getImageData(0, 0, width, height).data;
+             for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+                 pixelArray[j]     = data[i]     / 255;
+                 pixelArray[j + 1] = data[i + 1] / 255;
+                 pixelArray[j + 2] = data[i + 2] / 255;
+             }
+             node.port.postMessage({ type: 'pixels', data: { pixels: pixelArray, width, height } });
+         };
+
+         track.clearTrack = () => {
+             ctx.fillStyle = '#000000';
+             ctx.fillRect(0, 0, width, height);
+             updatePixels();
+         };
+         track.clearTrack();
+
+         const sendParams = () => {
+             node.port.postMessage({ type: 'params', data: {
+                 speed: +controls.querySelector('.speed').value,
+                 volume: +controls.querySelector('.vol').value,
+                 pan: +controls.querySelector('.pan').value,
+                 fmin: +controls.querySelector('.fmin').value,
+                 fmax: +controls.querySelector('.fmax').value,
+                 density: +controls.querySelector('.density').value,
+                 reverse: controls.querySelector('.reverse').checked
+             }});
+         };
+         controls.querySelectorAll('input').forEach(el => el.addEventListener('input', sendParams));
+         sendParams();
+
+         // PLAY/PAUSE
+         const speedInput = controls.querySelector('.speed');
+         const playPauseBtn = controls.querySelector('.play-pause');
+         speedInput.addEventListener('input', () => {
+             if (+speedInput.value > 0) track.lastSpeed = +speedInput.value;
+         });
+         playPauseBtn.onclick = () => {
+             if (+speedInput.value > 0) {
+                 track.lastSpeed = +speedInput.value;
+                 speedInput.value = 0;
+                 playPauseBtn.textContent = 'Play';
+             } else {
+                 speedInput.value = track.lastSpeed;
+                 playPauseBtn.textContent = 'Pause';
+             }
+             sendParams();
+         };
+
+         // PLAYHEAD CON COMPENSACIÓN DE LATENCIA
+         node.port.onmessage = (e) => {
+             if (e.data.type === 'playhead') {
+                 const speed = +controls.querySelector('.speed').value || 0;
+                 const reverse = controls.querySelector('.reverse').checked;
+                 const actualSpeed = speed * (reverse ? -1 : 1);
+                 const compensation = actualSpeed * (LATENCY_MS / 1000); // píxeles
+                 let pos = (e.data.value - compensation + width * 1000) % width;
+                 if (pos < 0) pos += width;
+                 playhead.style.left = `${(pos / width) * 100}%`;
+             }
+         };
+
+         // BOTONES
+         controls.querySelector('.clear').onclick = () => track.clearTrack();
+         controls.querySelector('.rand').onclick = () => {
+             track.clearTrack();
+             for (let i = 0; i < 120; i++) {
+                 ctx.fillStyle = `rgb(${Math.random()*255|0},${Math.random()*255|0},${Math.random()*255|0})`;
+                 const s = Math.random()*30 + 10;
+                 ctx.fillRect(Math.random()*(width-s), Math.random()*(height-s), s, s);
+             }
+             updatePixels();
+         };
+         controls.querySelector('.delete').onclick = () => {
+             node.disconnect();
+             div.remove();
+             tracks.splice(tracks.indexOf(track), 1);
+         };
+
+         // DIBUJO
+         let drawing = false;
+         const draw = (e) => {
+             const r = canvas.getBoundingClientRect();
+             const x = e.clientX - r.left, y = e.clientY - r.top;
+             ctx.beginPath();
+             ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
+             ctx.fillStyle = brushColor;
+             ctx.fill();
+         };
+         canvas.addEventListener('pointerdown', e => { drawing = true; draw(e); audioCtx.resume(); });
+         canvas.addEventListener('pointermove', e => drawing && draw(e));
+         canvas.addEventListener('pointerup', () => { drawing = false; updatePixels(); });
+         canvas.addEventListener('pointerleave', () => { drawing = false; updatePixels(); });
+
+         setInterval(updatePixels, 120);
+         tracks.push(track);
+     }
+    </script>
+</body>
+</html>

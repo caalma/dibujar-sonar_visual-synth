@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DibujarSonar - Visual Synth</title>
+        <link rel="stylesheet" href="css/styles.css">
+    </head>
+    <body>
+
+        <header class="top-bar">
+            <div class="group">
+                <label for="size-input">PISTA</label>
+                <input type="text" id="size-input" value="128x128" placeholder="128x128">
+                <button id="create-track" title="Crear pista vacia">+ NUEVA</button>
+                <button id="create-from-image" title="Crear pista desde una imagen">+ IMAGEN</button>
+                <input type="file" id="image-upload" accept="image/png,image/jpeg,image/webp" hidden>
+            </div>
+
+            <div class="group">
+                <label>PINCEL</label>
+                <input type="color" id="brush-color" value="#33aaee" title="Color del pincel">
+                <input type="range" id="brush-size" min="1" max="30" value="3" title="Grosor del pincel">
+                <span id="brush-size-value">3</span>
+                <button id="brush-eraser" title="Modo goma (tecla E o click derecho)">GOMA</button>
+                <label for="zoom-select">ZOOM</label>
+                <select id="zoom-select" title="Zoom de visualizacion">
+                    <option value="1">1x</option>
+                    <option value="2" selected>2x</option>
+                    <option value="3">3x</option>
+                    <option value="4">4x</option>
+                </select>
+            </div>
+
+            <div class="group">
+                <label>TRANSPORTE</label>
+                <button id="global-play" title="Pausar/reanudar todas las pistas (Espacio)">PAUSA</button>
+                <button id="global-restart" title="Todas las pistas vuelven a x=0">REINICIO</button>
+                <button id="sync-toggle" title="Sincronizacion: arranque alineado en x=0">SYNC</button>
+                <input type="range" id="global-speed" min="0.25" max="4" step="0.05" value="1" title="Multiplicador global de velocidad">
+                <span id="global-speed-value">1.00x</span>
+                <label for="master-vol">MASTER</label>
+                <input type="range" id="master-vol" min="0" max="1" step="0.01" value="0.8" title="Volumen master">
+            </div>
+
+            <div class="group">
+                <button id="rec-btn" title="Grabar el bus master en WAV">REC</button>
+                <span id="rec-time">00:00</span>
+                <div class="vu" title="Nivel master"><div id="vu-fill"></div></div>
+            </div>
+
+            <div class="group">
+                <button id="save-project" title="Descargar el proyecto como JSON">GUARDAR</button>
+                <button id="load-project" title="Cargar un proyecto JSON">CARGAR</button>
+                <input type="file" id="load-input" accept=".json,application/json" hidden>
+                <button id="clear-all" title="Limpiar todos los lienzos">LIMPIAR</button>
+            </div>
+
+            <div class="group">
+                <button id="help-btn" title="Ayuda (tecla ?)">?</button>
+            </div>
+        </header>
+
+        <main id="tracks-container">
+            <div id="empty-hint">
+                <p>Crea una pista con <b>+ NUEVA</b> o desde una imagen con <b>+ IMAGEN</b>.</p>
+                <p>Dibuja pixeles: rojo = sierra, verde = cuadrada, azul = triangulo. Presiona <b>?</b> para ver la ayuda.</p>
+            </div>
+        </main>
+
+        <script type="module" src="js/main.js"></script>
+    </body>
+</html>
